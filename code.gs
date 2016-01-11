@@ -1,39 +1,17 @@
-/*
-Purpose:
-  This sheet is effectively a cache of the historical values of stocks you want to track.
-  This permits analysing and graphing without having to constantly use GOOGLEFINANCE()
-  function, which eventually becomes throttled by Google Apps when you start tracking
-  tens of stock. This is a problem when you track a hundreds of stocks over decades.	
-	
-Why:
-  Your favorite app will likely not be supported in 10 years, neither your favorite web site
-  maintained by a startup with no income. On the other hand, spreadsheets have a 99% chance
-  of being around in 2040. Dead data can be printed and analysed 10 years later, so it's
-  better to retrieve the data and keep a static copy than rely on the functions to retrieve
-  the data on the fly. For example, many finance functions do not want to go back more than
-  10 years ago, which can be a real problem once you're over 30. You can import a CSV and mix
-  with the sheets here. Even if the code here doesn't work in 2040, your data is safe.
-
-Actions:
-- Track a new stock, ETF or fund.
-    Use the menu "Stocks", "Add new sheet" or press the button on the right. Give it
-    the ticker symbol and the starting date to track the stock. For example, try "GOOG"
-    with date "2015" will start on the first day the stock market was open in 2015.
-
-- Track currency exchange rate
-    Same as stock, use CURRENCY:FROMTO as one word. For example, USD to CAD is
-    "CURRENCY:USDCAD".
-
-- Update a sheet
-    Use the menu "Stocks", "Update current sheet".
-
-- Update all sheets
-    Use the menu "Stocks", "Update all sheets".
-
-- Start over with a sheet
-    Just delete the sheet and create it again.
-*/
-
+// Copyright 2016 Marc-Antoine Ruel. All rights reserved.
+// Use of this source code is governed under the Apache License, Version 2.0
+// that can be found in the LICENSE file.
+//
+//
+// Please see https://github.com/maruel/market_track/ for up to date information!
+//
+//
+// On Google Sheets templates, it is impossible to "sync" a spreadsheet an updated template
+// version. Yet, this project is constantly being improved. This is why it is important
+// to  replace the content of this file with the updated version at
+// https://github.com/maruel/market_track/blob/master/code.gs
+//
+//
 // References:
 // https://support.google.com/docs/answer/3093281
 // https://developers.google.com/apps-script/reference/base/logger
@@ -41,25 +19,54 @@ Actions:
 // https://developers.google.com/apps-script/reference/spreadsheet/sheet
 // https://developers.google.com/apps-script/reference/spreadsheet/embedded-chart-builder
 //
+//
 // TODO(maruel):
 // - Figure out a way to fill dividend via a third party service.
 // - Use the currency when formatting the lines baed on B1.
+// - Have this script warn the user when a new version of this script is live.
+//   This needs to include an easy way to turn the check off and explanation
+//   about using multiple files for user scripts.
+// - Discover titleLine value in createChart() based on the sheet content, so a user can
+//   add more headers and it just works.
+// - Do not get all values in createChart() but only the ranges needed.
+// - Update shares # in updateOneSheet().
+
 
 // Line at which the data starts. Update this value if you insert more headers.
 var titleLine = 6;
 
+
+// Hooks
+
+function onOpen(e) {
+  var ui = SpreadsheetApp.getUi()
+  var menu = ui.createMenu('Stocks');
+  menu.addItem('Update all sheets', 'updateAllSheets').addToUi();
+  menu.addItem('Update current sheet', 'updateCurrentSheet').addToUi();
+  menu.addItem('Add new sheet', 'addNewSheet').addToUi();
+  var scratchSheet = SpreadsheetApp.getActive().getSheetByName("Explanations");
+  if (scratchSheet == null) {
+    ui.alert("Please recreate the sheet 'Explanations' before doing anything!\nAdd explanations to it. Lines 50 and later will be used as scratch space.");
+  } else {
+    updateAllSheets();
+  }
+}
+
+// Stock sheets management.
 
 // Returns true if it is a sheet that contains stocks.
 function isValidStockSheet(sheet) {
   return (sheet.getRange("A1").getValue() == "Currency");
 }
 
+// Update all sheets, silently ignoring invalid ones.
 function updateAllSheets() {
   for (var sheet in SpreadsheetApp.getActive().getSheets()) {
     updateOneSheet(sheet);
   }
 }
 
+// Update the current sheet, warn the user if it is invalid.
 function updateCurrentSheet() {
   if (!updateOneSheet(SpreadsheetApp.getActiveSheet())) {
     var ui = SpreadsheetApp.getUi();
@@ -110,9 +117,11 @@ function updateOneSheet(sheet) {
       ["=MIN(E7:E" + lastRow + ")"],
       ["=MAX(E7:E" + lastRow + ")"],
   ])
+  // Resize the columns with some margin.
   SpreadsheetApp.flush();
   for (var i = 1; i < 8; i++) {
     sheet.autoResizeColumn(i);
+    sheet.setColumnWidth(i, sheet.getColumnWidth(i)+10);
   }
   createChart(sheet);
   return true;
@@ -152,11 +161,10 @@ function createChart(sheet) {
       },
     },
   };
-  var isCurr = isCurrency(ticker);
   var lastRow = sheet.getLastRow();
   var range = sheet.getRange(titleLine, 1, lastRow - titleLine - 1, 6);
   var values = range.getValues();
-  if (isCurr) {
+  if (isCurrency(ticker)) {
     var series = {};
   } else {
     // Cut the volume line at half of the graph.
@@ -214,11 +222,29 @@ function addNewSheet() {
   }
   sheet = SpreadsheetApp.getActive().insertSheet(ticker);
   SpreadsheetApp.flush();
-  var currency = getCurrency(ticker);
+  
+  // Bootstrap currency and # of shares.
+  if (isCurrency(ticker)) {
+    var currency = ticker.substr(9, 3);
+    var cell1 = sheet.getRange("B1");
+  } else {
+    // Interleaving calls may help with latency (?)
+    var cell1 = runGoogleFinanceInternal(sheet, "B1", [ticker, "currency"]);
+    var cell2 = runGoogleFinanceInternal(sheet, "B2", [ticker, "shares"]);
+    var currency = cell1.getValue();
+    var shares = cell2.getValue();
+    if (shares != "#N/A") {
+      shares = shares / 1000000.;
+     cell2.setNumberFormat("0.00 \"M\"");
+    }
+    cell2.setValue(shares);
+  }
   if (currency == "#N/A") {
     ui.alert(ticker + " is not a valid ticker. Delete the sheet and try again.");
     return false;
   }
+  cell1.setValue(currency);
+
   var response = ui.prompt('Initializing new sheet', 'When do you want to start? The format is YYYY, YYYY-MM or YYYY-MM-DD. If unspecified, it starts at Jan 1st of the current year', ui.ButtonSet.OK_CANCEL);
   if (response.getSelectedButton() == ui.Button.CANCEL) {
     return false;
@@ -240,43 +266,44 @@ function addNewSheet() {
   }
 
   // Initialize the headers.
+  var sections = [
+    ["Currency"],
+    ["Shares"],
+    ["Market Cap"],
+    ["Close low"],
+    ["Close high"],
+  ];
   // Sadly dividends are not supported by GOOGLEFINANCE() so one has to track it manually! :(
+  var headers = [
+    ["Date", "Open", "High", "Low", "Close", "Volume", "Dividend"],
+  ];
   if (isCurrency(ticker)) {
-    var headers = [
-      ["Currency", currency, "", "", "", "", ""],
-      ["", "", "", "", "", "", ""],
-      ["", "", "", "", "", "", ""],
-      ["Close low", "=MIN(E7:E7)", "", "", "", "", ""],
-      ["Close high", "=MAX(E7:E7)", "", "", "", "", ""],
-      ["Date", "", "", "", "Close", "", ""],
-    ];
+    sections[1][0] = "";
+    sections[2][0] = "";
+    headers[0][1] = "";
+    headers[0][2] = "";
+    headers[0][3] = "";
+    headers[0][5] = "";
+    headers[0][6] = "";
     sheet.setColumnWidth(3, 15);
     sheet.setColumnWidth(4, 15);
     sheet.setColumnWidth(6, 15);
     sheet.setColumnWidth(7, 15);
   } else {
-    var shares = getNumberShares(ticker);
-    if (shares != "#N/A") {
-      shares = shares / 1000000.;
-    } else {
-      shares = 0;
-    }
-    var headers = [
-      ["Currency", currency, "", "", "", "", ""],
-      ["Shares", shares, "", "", "", "", ""],
-      ["Market Cap", "=$B$2*$B$" + (titleLine + 1), "", "", "", "", ""],
-      ["Close low", "=MIN(E7:E7)", "", "", "", "", ""],
-      ["Close high", "=MAX(E7:E7)", "", "", "", "", ""],
-      ["Date", "Open", "High", "Low", "Close", "Volume", "Dividend"],
-    ];
+    var cell = sheet.getRange("B3");
+    cell.setNumberFormat("#,##0\\ \"M\"[$$-C0C]");
+    cell.setValue("=$B$2*$B$" + (sections.length + 2));
+    var range = sheet.getRange("B4:B5");
+    range.setNumberFormat("#,##0.00\ [$$-C0C]");
+    range.setValues([["=MIN(E7:E7)"], ["=MAX(E7:E7)"]]);
   }
-  var range = sheet.getRange("A1:G" + titleLine);
+  var range = sheet.getRange(1, 1, sections.length, 1);
+  range.setValues(sections);
+  range.setFontWeight("bold");
+  var range = sheet.getRange(sections.length + 1, 1, 1, headers[0].length);
   range.setValues(headers);
-  sheet.getRange(1, 1, titleLine - 1, 1).setFontWeight("bold");
-  sheet.getRange(titleLine, 1, 1, 7).setFontWeight("bold");
-  sheet.getRange("B2").setNumberFormat("0.00 \"M\"");
-  sheet.getRange("B3").setNumberFormat("#,##0\\ \"M\"[$$-C0C]");
-  sheet.getRange("B4:B5").setNumberFormat("#,##0.00\ [$$-C0C]");
+  range.setFontWeight("bold");
+  range.setHorizontalAlignment("center");
 
   // Initialize with the start date. Search for the first valid date.
   var values = getDayValues(ticker, startDate);
@@ -284,18 +311,20 @@ function addNewSheet() {
     ui.alert("Failed to find a date where this ticker is valid.");
     return false;
   }
-  sheet.getRange(titleLine + 1, 1, 1, values[0].length).setValues(values);
-  formatLines(sheet, titleLine + 1, 1);
+  sheet.getRange(sections.length + 2, 1, 1, values[0].length).setValues(values);
+  formatLines(sheet, sections.length + 2, 1);
 
   // Tidy the sheet.
   var delta = sheet.getMaxColumns() - 8;
   if (delta) {
     sheet.deleteColumns(9, delta);
   }
+  /*
   var delta = sheet.getMaxRows() - titleLine-2;
   if (delta) {
     sheet.deleteRows(titleLine+3, delta);
   }
+  */
   sheet.setColumnWidth(8, 1000);
   SpreadsheetApp.flush();
   
@@ -305,25 +334,12 @@ function addNewSheet() {
 
 // Format lines of data.
 function formatLines(sheet, row, numRows) {
-  sheet.getRange(row, 1, numRows, 1).setNumberFormat("yyyy-MM-dd");
+  var range = sheet.getRange(row, 1, numRows, 1);
+  range.setNumberFormat("yyyy-MM-dd");
+  range.setHorizontalAlignment("left");
+
   sheet.getRange(row, 2, numRows, 4).setNumberFormat("#,##0.00\ [$$-C0C]");
   sheet.getRange(row, 6, numRows, 1).setNumberFormat("#,##0");
-}
-
-// Hooks
-
-function onOpen(e) {
-  var ui = SpreadsheetApp.getUi()
-  var menu = ui.createMenu('Stocks');
-  menu.addItem('Update all sheets', 'updateAllSheets').addToUi();
-  menu.addItem('Update current sheet', 'updateCurrentSheet').addToUi();
-  menu.addItem('Add new sheet', 'addNewSheet').addToUi();
-  var scratchSheet = SpreadsheetApp.getActive().getSheetByName("Explanations");
-  if (scratchSheet == null) {
-    ui.alert("Please recreate the sheet 'Explanations' before doing anything!\nAdd explanations to it. Lines 50 and later will be used as scratch space.");
-  } else {
-    updateAllSheets();
-  }
 }
 
 // Utilities
@@ -408,21 +424,9 @@ function getDayValuesUpToToday(ticker, startDate) {
 }
 
 // Returns true if the ticker is a currency exchange.
+// This function doesn't do RPC.
 function isCurrency(ticker) {
   return ticker.substr(0, 9) == "CURRENCY:";
-}
-
-// Returns the currency (e.g. USD, CAD) in which the ticker is traded. For currency exchange, returns the FROM part.
-function getCurrency(ticker) {
-  if (isCurrency(ticker)) {
-    return ticker.substr(9, 3);
-  }
-  return runGoogleFinanceSingle([ticker, "currency"]);
-}
-
-// Returns the number of shares today. Only valid for stocks and ETF, not currencies.
-function getNumberShares(ticker) {
-  return runGoogleFinanceSingle([ticker, "shares"]);
 }
 
 function getSymbolAtDate(ticker, startDate) {
@@ -438,18 +442,10 @@ function getSymbolAtDate(ticker, startDate) {
 // Utilities: low level GOOGLEFINANCE functions.
 // These could be replaced by something else than GOOGLEFINANCE, e.g. UrlFetchApp.fetch() to another data provider.
 
-function runGoogleFinanceSingle(args) {
-  var scratchSheet = SpreadsheetApp.getActive().getSheetByName("Explanations");
-  var cell = runGoogleFinanceInternal(scratchSheet, args);
-  var value = cell.getValue();
-  cell.clearContent();
-  return value;
-}
-
 // Returns a list of list, e.g. [[]].
 function runGoogleFinanceRange(args, nbLines) {
   var scratchSheet = SpreadsheetApp.getActive().getSheetByName("Explanations");
-  var cell = runGoogleFinanceInternal(scratchSheet, args);
+  var cell = runGoogleFinanceInternal(scratchSheet, "A50", args);
   var values = scratchSheet.getRange(51, 1, 51+nbLines, 6).getValues();
   // Trim the extra lines.
   while (values.length && values[values.length-1][0] == "") {
@@ -472,13 +468,18 @@ function runGoogleFinanceRange(args, nbLines) {
 
 // https://support.google.com/docs/answer/3093281
 // Sadly, GOOGLEFINANCE() is not accessible from Google Apps (!).
-function runGoogleFinanceInternal(scratchSheet, args) {
+function runGoogleFinanceInternal(sheet, location, args) {
+  var cell = sheet.getRange(location);
+  cell.setValue(getGOOGLEFINANCE(args));
+  return cell
+}
+
+// Returns a GOOGLEFINANCE() call to put in a cell with properly escaped arguments.
+// This function doesn't do RPC.
+function getGOOGLEFINANCE(args) {
   var asStr = [];
   for (var a in args) {
     asStr.push("\"" + args[a] + "\"");
   }
-  var fn = "=GOOGLEFINANCE(" + asStr.join("; ") + ")";
-  var cell = scratchSheet.getRange("A50");
-  cell.setValue(fn);
-  return cell
+  return "=GOOGLEFINANCE(" + asStr.join("; ") + ")";
 }
