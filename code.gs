@@ -21,18 +21,19 @@
 //
 //
 // TODO(maruel):
-// - Figure out a way to fill dividend via a third party service.
+// - Fill dividend via a third party service.
+// - Fill stock name and description via a third party service (or web page scraping).
 // - Use the currency when formatting the lines based on B1, e.g. £ for GBP, € for EUR.
 // - Have this script warn the user when a new version of this script is live.
 //   This needs to include an easy way to turn the check off and explanation
 //   about using multiple files for user scripts.
 // - Do not get all values in createChart() but only the ranges needed.
-// - Update shares # in updateOneSheet().
+// - Add netassets, eps, etc.
 
 
 // Globals
 
-// Information header. If you change this, you need to change the code AND your existing sheets!
+// Information header. If you rename any item, you need to change the code AND your existing sheets!
 var headerRows = [
   // The ticker is specified here in addition as the sheet name. This is necessary
   // to differentiate between stocks listed with the same name on two exchanges like NYSE:BMO
@@ -43,7 +44,13 @@ var headerRows = [
   // The currency in which the stock is traded. For dual listed stocks like BMO but also
   // like TSE:SH / NYSE:SHOP.
   "Currency",
-  // Number of outstanding shares. This value is #N/A for ETFs.
+  // Long name, as in "Alphabet Inc." for "GOOG" and "GOOGL".
+  "Name",
+  // Explanation, mostly useful for ETFs which describe which index is tracked.
+  "Description",
+  // Current value. This is useful for live calculation.
+  "Current",
+  // Number of outstanding shares. This value is #N/A for ETFs and currency convertion rate.
   "Shares",
   // Market capitalization if relevant.
   "Market cap",
@@ -54,6 +61,42 @@ var headerRows = [
   // Empty line before the raw data.
   "",
 ];
+
+// Default value for each header above. It must kept in sync.
+var headerDefaultsValue = [
+  // Ticker is set statically at sheet creation.
+  null,
+  // Currency is set statically at sheet creation. It never changes. Well, if you ever saw
+  // a ticker change currency, please warn me!
+  null,
+  // Name and description must be set manually for now.
+  "<change me>",
+  "<change me>",
+  // Current is a function call. It's meant to be an instantaneous value. It could be safely
+  // replaced with the "Close" value at the last row.
+  "=GOOGLEFINANCE($B$1)",
+  // Shares is a function call. It's not a big deal since we're not tracking the historical value.
+  // At best it could be tracked on a quaterly basis.
+  "=GOOGLEFINANCE($B$1; \"shares\")/1000000",
+  // Market cap is a function call. It's not a big deal since we're not tracking the historical
+  // value because it's dependent on the number of shares.
+  "=GOOGLEFINANCE($B$1; \"marketcap\")/1000000",
+  // Close low and high are updated based on the actual rows.
+  null,
+  null,
+  // Final empty line.
+  null,
+];
+
+// Returns the cell with the ticker for the sheet.
+function getTickerCell(sheet) {
+  return sheet.getRange(headerRows.indexOf("Ticker")+1, 2);
+}
+
+// Returns the cell with the currency (e.g. USD, GBP) for the ticker of the sheet.
+function getCurrencyCell(sheet) {
+  return sheet.getRange(headerRows.indexOf("Currency")+1, 2);
+}
 
 
 // Hooks
@@ -71,11 +114,6 @@ function onOpen(e) {
 
 // Stock sheets management.
 
-// Returns true if it is a sheet that contains stocks.
-function isValidStockSheet(sheet) {
-  return (sheet.getRange("A1").getValue() == ["Ticker"]);
-}
-
 // Updates all sheets, silently ignoring invalid ones.
 function updateAllSheets() {
   for (var sheet in SpreadsheetApp.getActive().getSheets()) {
@@ -92,14 +130,15 @@ function updateCurrentSheet() {
 
 // Adds the missing rows to a sheet, then update the metadata.
 // Resizing columns is super slow so only do it optionally.
+// Gets the last line in column "A" to retrieve the date of the most
+// recent line, then add new lines until yesterday.
 function updateOneSheet(sheet, resizeColumns) {
-  if (!isValidStockSheet(sheet)) {
+  if (sheet.getRange("A1").getValue() != "Ticker") {
     return false;
   }
   sheet.activate();
 
-  // Get the last line in column "A" to retrieve the date, then add new lines until yesterday.
-  var ticker = sheet.getRange("B1").getValue();
+  var ticker = getTickerCell(sheet).getValue();
   var lastRow = sheet.getLastRow();
   var startDate = nextDay(toStr(sheet.getRange(lastRow, 1).getValue()));
   Logger.log("", startDate, lastRow);
@@ -137,12 +176,8 @@ function updateOneSheetInner(sheet, ticker, firstRow, lastRow, resizeColumns) {
     sheet.deleteRows(lastRow+1, delta - 10);
   }
 
-  // Market cap is last share value * current price.
-  if (!isCurrency(ticker)) {
-    sheet.getRange("B4").setValue("=$B$3*$B$" + (lastRow-1));
-  }
   // Min and max.
-  sheet.getRange("B5:B6").setValues(
+  sheet.getRange(headerRows.indexOf("Close low")+1, 2, 2, 1).setValues(
     [
       ["=MIN($E$" + firstRow + ":$E$" + lastRow + ")"],
       ["=MAX($E$" + firstRow + ":$E$" + lastRow + ")"],
@@ -181,7 +216,7 @@ function createChart(sheet, ticker, firstRow, lastRow) {
   // https://developers.google.com/chart/interactive/docs/reference#options
   // https://developers.google.com/chart/interactive/docs/gallery/linechart#configuration-options
   // http://icu-project.org/apiref/icu4c/classDecimalFormat.html#details
-  var currency = sheet.getRange("B2").getValue();
+  var currency = getCurrencyCell(sheet).getValue();
   var width = sheet.getColumnWidth(8);
   var legend = {
   };
@@ -247,7 +282,7 @@ function createChart(sheet, ticker, firstRow, lastRow) {
 // Creates a new sheet to track a new stock, ETF or exchange rate.
 function addNewSheet() {
   var ui = SpreadsheetApp.getUi();
-  var response = ui.prompt('Initializing new sheet', 'Please give the ticker symbol.', ui.ButtonSet.OK_CANCEL);
+  var response = ui.prompt("Initializing new sheet", "Please give the fully qualified ticker symbol, e.g. NASDAQ:GOOGL or TSE:BMO. For currency exchange rate, use CURRENCY:FROMTO, e.g. CURRENCY:USDCAD.", ui.ButtonSet.OK_CANCEL);
   if (response.getSelectedButton() == ui.Button.CANCEL) {
     return false;
   }
@@ -261,43 +296,17 @@ function addNewSheet() {
     return false;
   }
   sheet = ss.insertSheet(sheetName);
-  sheet.getRange("B1").setHorizontalAlignment("right").setValue(ticker);
 
-  // Bootstrap currency and # of shares.
-  if (isCurrency(ticker)) {
-    var currency = ticker.substr(9, 3);
-    var cellCurrency = sheet.getRange("B2");
-  } else {
-    var cellCurrency = sheet.getRange("B2").setValue(getGOOGLEFINANCE([ticker, "currency"]));
-    var currency = cellCurrency.getValue();
-    var cellShares = sheet.getRange("B3").setValue(getGOOGLEFINANCE([ticker, "shares"]));
-    var shares = cellShares.getValue();
-    if (shares != "#N/A") {
-      shares = shares / 1000000.;
-     cellShares.setNumberFormat("0.00 \"M\"");
-    }
-    cellShares.setHorizontalAlignment("right").setValue(shares);
-  }
-  if (currency == "#N/A") {
-    ui.alert(ticker + " is not a valid ticker. Delete the sheet and try again.");
-    return false;
-  }
-  cellCurrency.setHorizontalAlignment("right").setValue(currency);
-
-  var sections = [];
-  for (var i in headerRows) {
-    sections[i] = [headerRows[i]];
-  }
-
-  // Get the starting date.
+  // Get the starting date and get the initial data.
   while (true) {
-    var response = ui.prompt('Initializing new sheet', 'When do you want to start? The format is YYYY, YYYY-MM or YYYY-MM-DD. If unspecified, it starts at Jan 1st of the current year', ui.ButtonSet.OK_CANCEL);
+    var defaultDate = (new Date()).getFullYear() + "-01-01";
+    var response = ui.prompt("Initializing new sheet", "When do you want to start? The format is YYYY, YYYY-MM or YYYY-MM-DD. If unspecified, it starts at " + defaultDate + ".", ui.ButtonSet.OK_CANCEL);
     if (response.getSelectedButton() == ui.Button.CANCEL) {
       return false;
     }
     var startDate = response.getResponseText();
     if (startDate == "") {
-      startDate = (new Date()).getFullYear() + "-01-01";
+      startDate = defaultDate;
     }
     if (startDate.match(/^\d\d\d\d$/)) {
       startDate += "-01-01";
@@ -315,8 +324,8 @@ function addNewSheet() {
       continue;
     }
     // Initialize the data right away before the headers. This saves a few RPCs.
-    var values = getDayValuesUpToYesterday(sheet, ticker, sections.length + 1, startDate, true);
-    if (values == null) {
+    var data = getDayValuesUpToYesterday(sheet, ticker, headerRows.length + 1, startDate, true);
+    if (data == null) {
       ui.alert("Failed to find a date where this ticker is valid. Try earlier?");
       continue;
     }
@@ -324,33 +333,69 @@ function addNewSheet() {
   }
 
   // Sets the data.
-  sheet.getRange(sections.length + 1, 1, values.length, values[0].length).setValues(values);
+  sheet.getRange(headerRows.length + 1, 1, data.length, data[0].length).setValues(data);
   var currencyFmt = getCurrentFmt(ticker);
-  formatLines(sheet, sections.length + 2, values.length - 1, currencyFmt);
+  formatLines(sheet, headerRows.length + 2, data.length - 1, currencyFmt);
 
-  // Sadly dividends are not supported by GOOGLEFINANCE() so one has to track it manually! :(
-  sheet.getRange(sections.length + 1, values[0].length + 1).setValue("Dividend");
+  // Fix the data headers. Sadly dividends are not supported by GOOGLEFINANCE() so one has to track it manually! :(
   if (isCurrency(ticker)) {
-    // Clears Shares and Market Cap.
-    sections[2][0] = "  -  ";
-    sections[3][0] = "  -  ";
     // Clears Open, High, Low, Volume and Dividend.
-    sheet.getRange(sections.length + 1, 2, 1, 3).setValue("");
-    sheet.getRange(sections.length + 1, 6, 1, 2).setValue("");
+    sheet.getRange(headerRows.length + 1, 2, 1, 3).setValue("");
+    sheet.getRange(headerRows.length + 1, 6, 1, 2).setValue("");
     sheet.setColumnWidth(3, 15);
     sheet.setColumnWidth(4, 15);
     sheet.setColumnWidth(6, 15);
     sheet.setColumnWidth(7, 15);
   } else {
-    var cellMarketCap = sheet.getRange("B4");
-    cellMarketCap.setNumberFormat("#,##0\\ \"M\"[$$-C0C]");
-    cellMarketCap.setHorizontalAlignment("right");
-    cellMarketCap.setValue("=$B$3*$B$" + (sections.length + 2));
-    // Close low and high.
-    sheet.getRange("B5:B6").setNumberFormat(currencyFmt);
+    sheet.getRange(headerRows.length + 1, data[0].length + 1).setValue("Dividend");
   }
-  sheet.getRange(1, 1, sections.length, 1).setFontWeight("bold").setValues(sections);
-  sheet.getRange(sections.length + 1, 1, 1, values[0].length + 1).setFontWeight("bold").setHorizontalAlignment("center");
+  sheet.getRange(headerRows.length + 1, 1, 1, data[0].length + 1).setFontWeight("bold").setHorizontalAlignment("center");
+
+  // Sets the sheet header.
+  var values = [];
+  for (var i in headerRows) {
+    values[i] = [headerRows[i]];
+  }
+  sheet.getRange(1, 1, values.length, 1).setFontWeight("bold").setValues(values);
+  var values = [];
+  for (var i = 0; i < headerDefaultsValue.length; i++) {
+    values[i] = [headerDefaultsValue[i]];
+  }
+  values[0] = [ticker];
+  if (isCurrency(ticker)) {
+    values[1] = [ticker.substr(9, 3)];
+    var from = ticker.substr(9, 3);
+    var to = ticker.substr(12, 3);
+    values[2] = [from + ":" + to];
+    // Use the symbol once available.
+    values[3] = ["Value of 1 " + from + " in " + to];
+  } else {
+    values[1] = [getCurrencyCell(sheet).setValue(getGOOGLEFINANCE([ticker, "currency"])).getValue()];
+  }
+  if (values[1][0] == "#N/A") {
+    ui.alert(ticker + " is not a valid ticker. Delete the sheet and try again.");
+    return false;
+  }
+  var fmt = [
+    ["@STRING@"],
+    ["@STRING@"],
+    ["@STRING@"],
+    ["@STRING@"],
+    [currencyFmt],
+    ["0.00 \"M\""],
+    ["#,##0\\ \"M\"[$$-C0C]"],
+    [currencyFmt],
+    [currencyFmt],
+    ["@STRING@"],
+  ];
+  var range = sheet.getRange(1, 2, values.length, 1).setHorizontalAlignment("right").setValues(values).setNumberFormats(fmt);
+  // Zap out the fomulas returning #N/A.
+  var values = range.getValues();
+  for (var i = 0; i < values.length; i++) {
+    if (values[i][0] == "#N/A") {
+      sheet.getRange(i+1, 2).setValue("");
+    }
+  }
 
   // Tidy the sheet.
   var delta = sheet.getMaxColumns() - 8;
@@ -360,7 +405,7 @@ function addNewSheet() {
   sheet.setColumnWidth(8, 1000);
 
   // Format the headers and create the graph.
-  return updateOneSheetInner(sheet, ticker, sections.length + 2, sections.length + 1 + values.length, true);
+  return updateOneSheetInner(sheet, ticker, headerRows.length + 2, headerRows.length + 1 + data.length, true);
 }
 
 // Format lines of data.
