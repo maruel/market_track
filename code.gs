@@ -181,6 +181,34 @@ function GET_YFINANCE_LINK(ticker) {
   return "";
 }
 
+/**
+ * Returns the converted value from a foreign currency to local currency.
+ *
+ * @param {shortTicker} ticker of a stock in the short form.
+ * @param {tickerCurrency} currency in which the security is traded in.
+ * @param {localCurrency} currency in which the user does accounting and taxes in.
+ * @param {date} date in "YYYY-MM-DD" in which the transaction occurred.
+ * @return URL to Morning Star.
+ * @customfunction
+ */
+function AUTO_RATE(shortTicker, tickerCurrency, localCurrency, date) {
+  if (tickerCurrency == localCurrency) {
+    return 1;
+  }
+  var date = toStr(date);
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(tickerCurrency + localCurrency);
+  if (sheet == null) {
+    return "#N/A (no sheet)";
+  }
+  // What we want is VLOOKUP(). :/
+  values = sheet.getRange(1, 1, sheet.getLastRow(), 5).getValues();
+  for (var i in values) {
+    if (toStr(values[i][0]) == date) {
+      return values[i][4];
+    }
+  }
+  return "#N/A (couldn't find " + date + ")";
+}
 
 // Hooks.
 
@@ -191,6 +219,7 @@ function onOpen(e) {
   menu.addItem("Update all sheets", "updateAllSheets").addToUi();
   menu.addItem("Update current sheet", "updateCurrentSheet").addToUi();
   menu.addItem("Add new sheet", "addNewSheet").addToUi();
+  menu.addItem("Fix date range", "fixDateRange").addToUi();
   menu.addSeparator();
   menu.addItem("Internal self test", "selfTest").addToUi();
   updateAllSheets();
@@ -565,6 +594,24 @@ function selfTest() {
 // Utilities.
 
 // Utilities: Date
+
+
+// Converts the insane MM/DD/YYYY format to "YYYY-MM-DD".
+function fixDateRange() {
+  var range = SpreadsheetApp.getActiveSheet().getActiveRange();
+  var values = range.getValues();
+  for (var y in values) {
+    for (var x in values[y]) {
+      values[y][x] = toStr(values[y][x]);
+      if (values[y][x].indexOf("/") != -1) {
+        // Assumes MM/dd/yyyy.
+        var parts = values[y][x].split("/");
+        values[y][x] = parts[2] + "-" + parts[0] + "-" + parts[1];
+      }
+    }
+  }
+  range.setNumberFormat("yyyy-MM-dd").setHorizontalAlignment("left").setValues(values);
+}
 
 
 // Returns today as "YYYY-MM-DD".
