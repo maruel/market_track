@@ -37,6 +37,7 @@
 //   a poor proxy to know if it is an ETF.
 // - Technically TSE: is not an official prefix for the TSX but that's what Google
 //   finance uses.
+// - Handle stock gift in ACB calculation in CALCULATE_ACB().
 
 
 // Globals.
@@ -87,11 +88,11 @@ var headerRows = [
     "Market capitalization if relevant. Market Cap is dependent on number of shares.",
   ],
   [
-    "Close low", "<replaced by function>", "right", "$",
+    "Close low", "=MIN(OFFSET($E$1:$E; MATCH(\"Date\"; $A$1:$A); 0))", "right", "$",
     "Lowest value in the tracked closing values below.",
   ],
   [
-    "Close high", "<replaced by function>", "right", "$",
+    "Close high", "=MAX(OFFSET($E$1:$E; MATCH(\"Date\"; $A$1:$A); 0))", "right", "$",
     "Highest value in the tracked closing values below.",
   ],
 
@@ -118,6 +119,7 @@ function getRow(title) {
   }
   SpreadsheetApp.getUi().alert("Internal error: Failed to find title \"" + title + "\"");
 }
+
 
 // Exposed functions usable in the sheet.
 
@@ -181,34 +183,6 @@ function GET_YFINANCE_LINK(ticker) {
   return "";
 }
 
-/**
- * Returns the converted value from a foreign currency to local currency.
- *
- * @param {shortTicker} ticker of a stock in the short form.
- * @param {tickerCurrency} currency in which the security is traded in.
- * @param {localCurrency} currency in which the user does accounting and taxes in.
- * @param {date} date in "YYYY-MM-DD" in which the transaction occurred.
- * @return URL to Morning Star.
- * @customfunction
- */
-function AUTO_RATE(shortTicker, tickerCurrency, localCurrency, date) {
-  if (tickerCurrency == localCurrency) {
-    return 1;
-  }
-  var date = toStr(date);
-  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(tickerCurrency + localCurrency);
-  if (sheet == null) {
-    return "#N/A (no sheet)";
-  }
-  // What we want is VLOOKUP(). :/
-  values = sheet.getRange(1, 1, sheet.getLastRow(), 5).getValues();
-  for (var i in values) {
-    if (toStr(values[i][0]) == date) {
-      return values[i][4];
-    }
-  }
-  return "#N/A (couldn't find " + date + ")";
-}
 
 // Hooks.
 
@@ -291,12 +265,6 @@ function updateOneSheetInner(sheet, ticker, firstRow, lastRow, resizeColumns) {
     sheet.deleteRows(lastRow+1, delta - 10);
   }
 
-  // Min and max.
-  sheet.getRange(getRow("Close low"), 2, 2, 1).setValues(
-    [
-      ["=MIN($E$" + firstRow + ":$E$" + lastRow + ")"],
-      ["=MAX($E$" + firstRow + ":$E$" + lastRow + ")"],
-    ])
   // Resize the columns with some margin. This is very slow, 1s per column.
   if (resizeColumns) {
     SpreadsheetApp.flush();
@@ -596,7 +564,7 @@ function selfTest() {
 // Utilities: Date
 
 
-// Converts the insane MM/DD/YYYY format to "YYYY-MM-DD".
+// Converts the insane MM/DD/YYYY format to "YYYY-MM-DD" and fix the formatting.
 function fixDateRange() {
   var range = SpreadsheetApp.getActiveSheet().getActiveRange();
   var values = range.getValues();
