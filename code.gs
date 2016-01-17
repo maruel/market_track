@@ -23,86 +23,170 @@
 // TODO(maruel):
 // - Fill dividend via a third party service.
 // - Fill stock name and description via a third party service (or web page scraping).
-// - Use the currency when formatting the lines based on B1, e.g. £ for GBP, € for EUR.
+// - Use the currency when formatting the lines based on B1, e.g. £ for GBP, € for EUR, etc.
 // - Have this script warn the user when a new version of this script is live.
 //   This needs to include an easy way to turn the check off and explanation
 //   about using multiple files for user scripts.
-// - Do not get all values in createChart() but only the ranges needed.
-// - Add netassets, eps, etc.
+// - Do not get all values in createChart() but only the ranges needed for performance.
+// - Add netassets, eps, etc. See https://support.google.com/docs/answer/3093281.
+// - Protect header cells that should not be modified.
+// - Clear up "Assert Type". It mixes different things; it could be a MutualFund of Stocks
+//   or ETF of Bonds.
+// - Figure out a way to fill "Asset Type" more accurately. Automatically filing "Weight"
+//   is probably a lost cause. Many ETF do not report the number of shares so use this as
+//   a poor proxy to know if it is an ETF.
+// - Technically TSE: is not an official prefix for the TSX but that's what Google
+//   finance uses.
 
 
-// Globals
+// Globals.
+
 
 // Information header. If you rename any item, you need to change the code AND your existing sheets!
+// Each line is [<A column text>, <B column text>, <B column alignment>, <B column format>, <notes>].
+// <B column format> can be "$" to mean it represent money in the local currency. 
 var headerRows = [
-  // The ticker is specified here in addition as the sheet name. This is necessary
-  // to differentiate between stocks listed with the same name on two exchanges like NYSE:BMO
-  // and TSE:BMO but to shorten the sheet name when you only track it on one market.
-  // It is safe to rename the sheet after it has been created since the sheet name is not used
-  // afterward.
-  "Ticker",
-  // The currency in which the stock is traded. For dual listed stocks like BMO but also
-  // like TSE:SH / NYSE:SHOP.
-  "Currency",
-  // Long name, as in "Alphabet Inc." for "GOOG" and "GOOGL".
-  "Name",
-  // Explanation, mostly useful for ETFs which describe which index is tracked.
-  "Description",
-  // Current value. This is useful for live calculation.
-  "Current",
-  // Number of outstanding shares. This value is #N/A for ETFs and currency convertion rate.
-  "Shares",
-  // Market capitalization if relevant.
-  "Market cap",
-  // Lowest value in the tracked closing values.
-  "Close low",
-  // Highest value in the tracked closing values.
-  "Close high",
+  [
+    "Ticker", "<replaced by ticker>", "right", "@STRING@",
+    "The ticker is fully qualified. This is necessary to differentiate between stocks listed with the same name on two exchanges like NYSE:BMO and TSE:BMO.",
+  ],
+  [
+    "Currency", "<replaced by currency>", "right", "@STRING@",
+    "Currency in which the stock is traded.",
+  ],
+  [
+    "Asset Type", "<change me>", "right", "@STRING@",
+    "Asset type is one of Currency, Stock, ETF, MutualFund, Bond. An ETF of Bonds would be marked as Bond.",
+  ],
+  [
+    "Weight", "<change me>", "right", "@STRING@",
+    "Country represented is one of CA, US, Intl or whatever user defined. For example TSE:VDU is traded in CAD but tracks international stocks everywhere except in the US.",
+  ],
+  [
+    "Name", "<change me>", "left", "@STRING@",
+    "Long name, as in \"Alphabet Inc.\" for \"GOOG\" and \"GOOGL\".",
+  ],
+  [
+    "Tracked Index", "<change me>", "left", "@STRING@",
+    "Mostly useful for ETFs which describe which index is tracked.",
+  ],
+  [
+    "URL", "<change me>", "left", "@STRING@",
+    "URL of the vendor for ETF, e.g. Vanguard, BlackRock, etc.",
+  ],
+  [
+    "Current", "=GOOGLEFINANCE($B$1)", "right", "$",
+    "Current value. This is useful for live calculation. It could be safely replaced with the \"Close\" value at the last row.",
+  ],
+  [
+    "Shares", "=GOOGLEFINANCE($B$1; \"shares\")/1000000", "right", "0.00 \"M\"",
+    "Number of outstanding shares if relevant. At best shares could be tracked on a quaterly basis but Google Finance doesn't give this value.",
+  ],
+  [
+    "Market cap", "=GOOGLEFINANCE($B$1; \"marketcap\")/1000000", "right", "#,##0\\ \"M\"[$$-C0C]",
+    "Market capitalization if relevant. Market Cap is dependent on number of shares.",
+  ],
+  [
+    "Close low", "<replaced by function>", "right", "$",
+    "Lowest value in the tracked closing values below.",
+  ],
+  [
+    "Close high", "<replaced by function>", "right", "$",
+    "Highest value in the tracked closing values below.",
+  ],
+
+  // Insert new automatically created row here.
+
+  ["=HYPERLINK(GET_GFINANCE_LINK($B$1); \"Google Finance\")", null, null, null, null],
+  ["=HYPERLINK(GET_YFINANCE_LINK($B$1); \"Yahoo Finance\")", null, null, null, null],
+  ["=HYPERLINK(GET_MORNINGSTAR_LINK($B$1; $B$2); \"Morning Star\")", null, null, null, null],
+  [
+    "<insert rows here>", null, null, null,
+    "User should add his/her data here.",
+  ],
   // Empty line before the raw data.
-  "",
+  ["", null, null, null, null],
 ];
 
-// Default value for each header above. It must kept in sync.
-var headerDefaultsValue = [
-  // Ticker is set statically at sheet creation.
-  null,
-  // Currency is set statically at sheet creation. It never changes. Well, if you ever saw
-  // a ticker change currency, please warn me!
-  null,
-  // Name and description must be set manually for now.
-  "<change me>",
-  "<change me>",
-  // Current is a function call. It's meant to be an instantaneous value. It could be safely
-  // replaced with the "Close" value at the last row.
-  "=GOOGLEFINANCE($B$1)",
-  // Shares is a function call. It's not a big deal since we're not tracking the historical value.
-  // At best it could be tracked on a quaterly basis.
-  "=GOOGLEFINANCE($B$1; \"shares\")/1000000",
-  // Market cap is a function call. It's not a big deal since we're not tracking the historical
-  // value because it's dependent on the number of shares.
-  "=GOOGLEFINANCE($B$1; \"marketcap\")/1000000",
-  // Close low and high are updated based on the actual rows.
-  null,
-  null,
-  // Final empty line.
-  null,
-];
 
-// Returns the cell with the ticker for the sheet.
-function getTickerCell(sheet) {
-  return sheet.getRange(headerRows.indexOf("Ticker")+1, 2);
+// Returns the row 1-based index.
+function getRow(title) {
+  for (var i = 0; i < headerRows.length; i++) {
+    if (headerRows[i][0] == title) {
+      return i+1;
+    }
+  }
+  SpreadsheetApp.getUi().alert("Internal error: Failed to find title \"" + title + "\"");
 }
 
-// Returns the cell with the currency (e.g. USD, GBP) for the ticker of the sheet.
-function getCurrencyCell(sheet) {
-  return sheet.getRange(headerRows.indexOf("Currency")+1, 2);
+// Exposed functions usable in the sheet.
+
+
+/**
+ * Returns a link to Google Finance.
+ *
+ * @param {ticker} ticker of a stock.
+ * @return URL to Google Finance.
+ * @customfunction
+ */
+function GET_GFINANCE_LINK(ticker) {
+  if (ticker) {
+    // Directs to the Canadian site. Change as desired.
+    return "https://www.google.ca/finance?q=" + ticker;
+  }
+  return "";
+}
+
+/**
+ * Returns a link to Morning Star.
+ *
+ * @param {ticker} ticker of a stock.
+ * @param {currency} currency in which the security is traded in.
+ * @return URL to Morning Star.
+ * @customfunction
+ */
+function GET_MORNINGSTAR_LINK(ticker, currency) {
+  if (ticker) {
+    var parts = ticker.split(":");
+    if (parts[0] != "CURRENCY") {
+      // Directs to the Canadian site. Change as desired.
+      if (currency == "CAD") {
+        return "https://quote.morningstar.ca/quicktakes/etf/etf_ca.aspx?region=CAN&culture=en-CA&t=" + parts[1];
+      } else {
+        return "https://quote.morningstar.ca/quicktakes/etf/etf_ca.aspx?region=USA&culture=en-CA&t=" + parts[1];
+      }
+    }
+    // Add more currency as desired.
+  }
+  return "";
+}
+
+/**
+ * Returns a link to Yahoo Finance.
+ *
+ * @param {ticker} ticker of a stock.
+ * @return URL to Yahoo Finance.
+ * @customfunction
+ */
+function GET_YFINANCE_LINK(ticker) {
+  if (ticker) {
+    var parts = ticker.split(":");
+    if (parts[0] != "CURRENCY") {
+      // Directs to the Canadian site. Change as desired.
+      // range can be 1d, 5d, 1m, 3m, 6m, 1y, 5y.
+      //return "https://ca.finance.yahoo.com/charts?s=" + name + "#symbol=" + name + ";range=my";
+      return "https://ca.finance.yahoo.com/echarts?s=" + parts[1] + "#symbol=" + parts[1] + ";range=my";
+    }
+  }
+  return "";
 }
 
 
-// Hooks
+// Hooks.
+
 
 function onOpen(e) {
-  var ui = SpreadsheetApp.getUi()
+  var ui = SpreadsheetApp.getUi();
   var menu = ui.createMenu("Stocks");
   menu.addItem("Update all sheets", "updateAllSheets").addToUi();
   menu.addItem("Update current sheet", "updateCurrentSheet").addToUi();
@@ -112,7 +196,9 @@ function onOpen(e) {
   updateAllSheets();
 }
 
+
 // Stock sheets management.
+
 
 // Updates all sheets, silently ignoring invalid ones.
 function updateAllSheets() {
@@ -138,10 +224,10 @@ function updateOneSheet(sheet, resizeColumns) {
   }
   sheet.activate();
 
-  var ticker = getTickerCell(sheet).getValue();
+  var ticker = sheet.getRange(getRow("Ticker"), 2).getValue();
   var lastRow = sheet.getLastRow();
   var startDate = nextDay(toStr(sheet.getRange(lastRow, 1).getValue()));
-  Logger.log("", startDate, lastRow);
+  Logger.log("Updating:", startDate, lastRow);
   var values = getDayValuesUpToYesterday(sheet, ticker, lastRow + 1, startDate, false);
   if (values == null) {
     // No new update, stop right away.
@@ -177,11 +263,11 @@ function updateOneSheetInner(sheet, ticker, firstRow, lastRow, resizeColumns) {
   }
 
   // Min and max.
-  sheet.getRange(headerRows.indexOf("Close low")+1, 2, 2, 1).setValues(
+  sheet.getRange(getRow("Close low"), 2, 2, 1).setValues(
     [
       ["=MIN($E$" + firstRow + ":$E$" + lastRow + ")"],
       ["=MAX($E$" + firstRow + ":$E$" + lastRow + ")"],
-  ])
+    ])
   // Resize the columns with some margin. This is very slow, 1s per column.
   if (resizeColumns) {
     SpreadsheetApp.flush();
@@ -216,7 +302,7 @@ function createChart(sheet, ticker, firstRow, lastRow) {
   // https://developers.google.com/chart/interactive/docs/reference#options
   // https://developers.google.com/chart/interactive/docs/gallery/linechart#configuration-options
   // http://icu-project.org/apiref/icu4c/classDecimalFormat.html#details
-  var currency = getCurrencyCell(sheet).getValue();
+  var currency = sheet.getRange(getRow("Currency"), 2).getValue();
   var width = sheet.getColumnWidth(8);
   var legend = {
   };
@@ -282,13 +368,17 @@ function createChart(sheet, ticker, firstRow, lastRow) {
 // Creates a new sheet to track a new stock, ETF or exchange rate.
 function addNewSheet() {
   var ui = SpreadsheetApp.getUi();
-  var response = ui.prompt("Initializing new sheet", "Please give the fully qualified ticker symbol, e.g. NASDAQ:GOOGL or TSE:BMO. For currency exchange rate, use CURRENCY:FROMTO, e.g. CURRENCY:USDCAD.", ui.ButtonSet.OK_CANCEL);
+  var response = ui.prompt("Initializing new sheet", "Please give the fully qualified ticker symbol, e.g. NASDAQ:GOOGL or TSE:BMO.\nFor currency exchange rate, use CURRENCY:FROMTO, e.g. CURRENCY:USDCAD.\nFor funds, you have to find the fund code, which may be harder to find. An example is MUTF_CA:FER050.", ui.ButtonSet.OK_CANCEL);
   if (response.getSelectedButton() == ui.Button.CANCEL) {
     return false;
   }
   var ticker = response.getResponseText().toUpperCase();
-  var parts = ticker.split(":");
-  var sheetName = parts[parts.length-1];
+  var tickerParts = ticker.split(":");
+  if (tickerParts.length != 2) {
+    ui.alert("Please use EXCHANGE:SYMBOL format.");
+    return false;
+  }
+  var sheetName = tickerParts[tickerParts.length-1];
   var ss = SpreadsheetApp.getActive();
   var sheet = ss.getSheetByName(sheetName);
   if (sheet != null) {
@@ -300,7 +390,7 @@ function addNewSheet() {
   // Get the starting date and get the initial data.
   while (true) {
     var defaultDate = (new Date()).getFullYear() + "-01-01";
-    var response = ui.prompt("Initializing new sheet", "When do you want to start? The format is YYYY, YYYY-MM or YYYY-MM-DD. If unspecified, it starts at " + defaultDate + ".", ui.ButtonSet.OK_CANCEL);
+    var response = ui.prompt("Initializing new sheet", "When do you want to start?\nThe format is YYYY, YYYY-MM or YYYY-MM-DD.\nIf unspecified, it starts at " + defaultDate + ".", ui.ButtonSet.OK_CANCEL);
     if (response.getSelectedButton() == ui.Button.CANCEL) {
       return false;
     }
@@ -336,9 +426,9 @@ function addNewSheet() {
   sheet.getRange(headerRows.length + 1, 1, data.length, data[0].length).setValues(data);
   var currencyFmt = getCurrentFmt(ticker);
   formatLines(sheet, headerRows.length + 2, data.length - 1, currencyFmt);
-
+  
   // Fix the data headers. Sadly dividends are not supported by GOOGLEFINANCE() so one has to track it manually! :(
-  if (isCurrency(ticker)) {
+  if (tickerParts[0] == "CURRENCY" || tickerParts[0] == "MUTF" || tickerParts[0] == "MUTF_CA") {
     // Clears Open, High, Low, Volume and Dividend.
     sheet.getRange(headerRows.length + 1, 2, 1, 3).setValue("");
     sheet.getRange(headerRows.length + 1, 6, 1, 2).setValue("");
@@ -353,42 +443,57 @@ function addNewSheet() {
 
   // Sets the sheet header.
   var values = [];
+  var notes = [];
   for (var i in headerRows) {
-    values[i] = [headerRows[i]];
+    if (headerRows[i].length != 5) {
+      ui.alert("Internal error: headerRows is misconfigured, check row " + i);
+      return false;
+    }
+    values[i] = [headerRows[i][0]];
+    notes[i] = [headerRows[i][4]];
   }
-  sheet.getRange(1, 1, values.length, 1).setFontWeight("bold").setValues(values);
+  sheet.getRange(1, 1, values.length, 1).setFontWeight("bold").setValues(values).setNotes(notes);
   var values = [];
-  for (var i = 0; i < headerDefaultsValue.length; i++) {
-    values[i] = [headerDefaultsValue[i]];
+  var fmt = [];
+  var align = [];
+  for (var i = 0; i < headerRows.length; i++) {
+    if (headerRows[i][1] == null) {
+      break;
+    }
+    values[i] = [headerRows[i][1]];
+    if (headerRows[i][3] == "$") {
+      fmt[i] = [currencyFmt];
+    } else {
+      fmt[i] = [headerRows[i][3]];
+    }
+    align[i] = [headerRows[i][2]];
   }
   values[0] = [ticker];
-  if (isCurrency(ticker)) {
+  if (tickerParts[0] == "CURRENCY") {
     values[1] = [ticker.substr(9, 3)];
     var from = ticker.substr(9, 3);
     var to = ticker.substr(12, 3);
-    values[2] = [from + ":" + to];
+    values[2] = ["Currency"];
+    values[4] = [from + ":" + to];
     // Use the symbol once available.
-    values[3] = ["Value of 1 " + from + " in " + to];
+    values[5] = ["Value of 1 " + from + " in " + to];
+  } else if (tickerParts[0] == "MUTF") {
+    // US Mutual Fund.
+    values[1] = ["USD"];
+    values[2] = ["MutualFund"];
+  } else if (tickerParts[0] == "MUTF_CA") {
+    // Canadian Mutual Fund.
+    values[1] = ["CAD"];
+    values[2] = ["MutualFund"];
   } else {
-    values[1] = [getCurrencyCell(sheet).setValue(getGOOGLEFINANCE([ticker, "currency"])).getValue()];
+    values[1] = [sheet.getRange(getRow("Currency"), 2).setValue(getGOOGLEFINANCE([ticker, "currency"])).getValue()];
+    values[2] = ["Stock"];
   }
   if (values[1][0] == "#N/A") {
     ui.alert(ticker + " is not a valid ticker. Delete the sheet and try again.");
     return false;
   }
-  var fmt = [
-    ["@STRING@"],
-    ["@STRING@"],
-    ["@STRING@"],
-    ["@STRING@"],
-    [currencyFmt],
-    ["0.00 \"M\""],
-    ["#,##0\\ \"M\"[$$-C0C]"],
-    [currencyFmt],
-    [currencyFmt],
-    ["@STRING@"],
-  ];
-  var range = sheet.getRange(1, 2, values.length, 1).setHorizontalAlignment("right").setValues(values).setNumberFormats(fmt);
+  var range = sheet.getRange(1, 2, values.length, 1).setHorizontalAlignments(align).setValues(values).setNumberFormats(fmt);
   // Zap out the fomulas returning #N/A.
   var values = range.getValues();
   for (var i = 0; i < values.length; i++) {
@@ -456,9 +561,11 @@ function selfTest() {
   previousActive.activate();
 }
 
-// Utilities
+
+// Utilities.
 
 // Utilities: Date
+
 
 // Returns today as "YYYY-MM-DD".
 function getToday() {
@@ -519,7 +626,9 @@ function getDaysBetween(start, end) {
   return e - s;
 }
 
-// Utilities: Stocks
+
+// Utilities: Stocks.
+
 
 // Returns true if the ticker is a currency exchange.
 // This function doesn't do RPC.
