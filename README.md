@@ -1,6 +1,6 @@
 # market_track
 
-Google App script for Google Sheets to track exchange rates, international stocks and funds
+Google Apps Script for Google Sheets to track exchange rates, international stocks and funds.
 
 
 ## Purpose
@@ -22,7 +22,7 @@ of being around in 2040.
 
 Static data can be printed on dead trees (paper) and analysed 10 years later, so it's
 better to retrieve the data and keep a static copy than rely on the functions to retrieve
-the data on the fly. For example, many finance functions do not want to go back more than
+the data on the fly. For example, a free finance provider may not want to go back more than
 10 years ago, which can be a real problem. You can import a CSV and mix
 with the sheets here. Even if the code here doesn't work in 2040, **your data is safe** and
 you can export it to CSV to import it back into _Microsoft Office 2038_.
@@ -36,23 +36,16 @@ you can export it to CSV to import it back into _Microsoft Office 2038_.
 1. Create a [new Google Sheet](https://docs.google.com/spreadsheets/create).
 2. Select menu `Tools`, `Scripts editor`.
 3. Paste the content of `code.gs` into the editor.
-4. Save, close and reopen the sheet.
-5. Select menu `Stocks`, `Add new sheet`. If you can't find it, it'll be on the far right right after `Help`. If it's not there, the script didn't load.
+4. Save, close the script editor.
+5. Close and reopen the sheet.
+6. Track your first ETF/Stock: Select menu `Stocks`, `Track a new <stock/currency/ETF/mutual fund> via a new sheet`. If you can't find it, it'll be on the far right right after `Help`. If it's not there, the script didn't load.
+   1. Repeat for all the ETF/Mutual Fund/Currency exchange rate/Stock you want to track.
+7. Create your first account: Select menu `Stocks`, `Create a new transactional account sheet (unregistered/401k/RRSP/etc)`.
+   1. Create one account sheet per type of account (registered, unregistered, different currency) you own.
+8. Fill the transactions you did in each account.
+
 
 To update to a new version, redo steps 2, 3 and 4 on an existing sheet, replacing the old code.
-
-
-### Track a new stock, ETF or fund
-
-Use the menu `Stocks`, `Add new sheet` or press the button on the right. Give it
-the ticker symbol and the starting date to track the stock. For example, try `GOOG`
-with date `2015` will start on the first day the stock market was open in 2015.
-
-
-### Track currency exchange rate
-
-Same as stock, use CURRENCY:FROMTO as one word. For example, USD to CAD is
-`CURRENCY:USDCAD`.
 
 
 ### Update a sheet
