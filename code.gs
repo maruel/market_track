@@ -14,6 +14,7 @@
 //
 // References:
 // https://support.google.com/docs/answer/3093281
+// https://support.google.com/docs/table/25273?hl=en
 // https://developers.google.com/apps-script/reference/base/logger
 // https://developers.google.com/apps-script/reference/spreadsheet/range
 // https://developers.google.com/apps-script/reference/spreadsheet/sheet
@@ -42,8 +43,9 @@
 // - Technically TSE: is not an official prefix for the TSX but that's what Google
 //   finance uses.
 // - Handle stock gift in ACB calculation in CALCULATE_ACB().
-// - ACB deduction is painful to calculate when using old capital losses:
-//   
+// - ACB deduction is painful to calculate when using old capital losses.
+// - Use ENSURE_TRACKED() to automate the sheet further.
+//
 
 
 // Exposed functions usable in the sheet.
@@ -111,6 +113,73 @@ function GET_YFINANCE_LINK(ticker) {
   return "";
 }
 
+/**
+ * Returns all the accounts.
+ *
+ * @return sorted list of accounts as a vertical list.
+ * @customfunction
+ */
+function ACCOUNTS() {
+  var values = [];
+  var sheets = SpreadsheetApp.getActive().getSheets();
+  for (var i = 0; i < sheets.length; i++) {
+    var sheet = sheets[i];
+    if (sheet.getRange("A1").getValue() == accountSheetHeaderRows[0][0]) {
+      values.push(sheet.getName());
+    }
+  }
+  values.sort();
+  var out = [];
+  for (var i in values) {
+    out.push([values[i]]);
+  }
+  if (out.length == 0) {
+    return null;
+  }
+  return out;
+}
+
+/**
+ * Returns the list of tracked securities as a vertical list.
+ * Ignores the currency exchange tabs.
+ *
+ * @return sorted list of tracked securities as a vertical list.
+ * @customfunction
+ */
+function TRACKED_STOCKS() {
+  var values = [];
+  var sheets = SpreadsheetApp.getActive().getSheets();
+  for (var i in sheets) {
+    var sheet = sheets[i];
+    var top = sheet.getRange(getStockSheetHeaderRow("Ticker"), 1, 1, 2).getValues();
+    if (top[0][0] == stockSheetHeaderRows[0][0] && top[0][1].substr(0, 9) != "CURRENCY:") {
+      values.push(sheet.getName());
+    }
+  }
+  values.sort();
+  var out = [];
+  for (var i in values) {
+    out.push([values[i]]);
+  }
+  if (out.length == 0) {
+    return null;
+  }
+  return out;
+}
+
+/**
+ * Ensures the ticker has the data tracked for the specified date.
+ *
+ * @param {ticker} ticker of a stock/currency/mutual fund.
+ * @param {date} date at which the security must be tracked.
+ * @return TRUE.
+ * @customfunction
+ */
+function ENSURE_TRACKED(ticker, date) {
+  // TODO!!
+  return true;
+}
+
 
 // General and Hooks.
 
@@ -123,7 +192,6 @@ function onOpen(e) {
   menu.addSeparator();
   menu.addItem("Track a new <stock/currency/ETF/mutual fund> via a new sheet", "newStockSheet");
   menu.addItem("Create a new transactional account sheet (unregistered/401k/RRSP/etc)", "newAccountSheet");
-  menu.addItem("Create new summary sheet (bootstrap)", "bootstrap");
   menu.addSeparator();
 
   var destructive = ui.createMenu("DESTRUCTIVE functions");
@@ -155,15 +223,15 @@ function onOpen(e) {
 // It creates account sheets.
 // It creates stock sheets.
 function bootstrap() {
-  var sheet = SpreadsheetApp.getActiveSheet();
-  sheet.setName("Summary");
-  summarySheetFormat(sheet);
+  formatCurrentSheetAsSummary();
+  // .. not yet.
 }
 
 // Updates all sheets, silently ignoring invalid ones.
 function updateAllSheets() {
-  for (var sheet in SpreadsheetApp.getActive().getSheets()) {
-    updateSheet(sheet, false);
+  var sheets = SpreadsheetApp.getActive().getSheets();
+  for (var i in sheets) {
+    updateSheet(sheets[i], false);
   }
 }
 
@@ -174,6 +242,7 @@ function updateCurrentSheet() {
   }
 }
 
+// Updates the current sheet by determining what kind of sheet it is.
 function updateSheet(sheet, resizeColumns) {
   var topLeft = sheet.getRange("A1").getValue();
   if (topLeft == stockSheetHeaderRows[0][0]) {
@@ -256,15 +325,15 @@ var stockSheetHeaderRows = [
     "URL of the vendor for ETF, e.g. Vanguard, BlackRock, etc.",
   ],
   [
-    "Current", "=GOOGLEFINANCE($B$1)", "right", "$",
+    "Current", "=GOOGLEFINANCE(VLOOKUP(\"Ticker\"; $A1:$B; 2; FALSE))", "right", "$",
     "Current value. This is useful for live calculation. It could be safely replaced with the \"Close\" value at the last row.",
   ],
   [
-    "Shares", "=GOOGLEFINANCE($B$1; \"shares\")/1000000", "right", "0.00 \"M\"",
+    "Shares", "=GOOGLEFINANCE(VLOOKUP(\"Ticker\"; $A1:$B; 2; FALSE); \"shares\")/1000000", "right", "0.00 \"M\"",
     "Number of outstanding shares if relevant. At best shares could be tracked on a quaterly basis but Google Finance doesn't give this value.",
   ],
   [
-    "Market cap", "=GOOGLEFINANCE($B$1; \"marketcap\")/1000000", "right", "#,##0\\ \"M\"[$$-C0C]",
+    "Market cap", "=GOOGLEFINANCE(VLOOKUP(\"Ticker\"; $A1:$B; 2; FALSE); \"marketcap\")/1000000", "right", "#,##0\\ \"M\"[$$-C0C]",
     "Market capitalization if relevant. Market Cap is dependent on number of shares.",
   ],
   [
@@ -278,9 +347,9 @@ var stockSheetHeaderRows = [
 
   // Insert new automatically created row here.
 
-  ["=HYPERLINK(GET_GFINANCE_LINK($B$1); \"Google Finance\")", null, null, null, null],
-  ["=HYPERLINK(GET_YFINANCE_LINK($B$1); \"Yahoo Finance\")", null, null, null, null],
-  ["=HYPERLINK(GET_MORNINGSTAR_LINK($B$1; $B$2); \"Morning Star\")", null, null, null, null],
+  ["=HYPERLINK(GET_GFINANCE_LINK(VLOOKUP(\"Ticker\"; $A1:$B; 2; FALSE)); \"Google Finance\")", null, null, null, null],
+  ["=HYPERLINK(GET_YFINANCE_LINK(VLOOKUP(\"Ticker\"; $A1:$B; 2; FALSE)); \"Yahoo Finance\")", null, null, null, null],
+  ["=HYPERLINK(GET_MORNINGSTAR_LINK(VLOOKUP(\"Ticker\"; $A1:$B; 2; FALSE); VLOOKUP(\"Currency\"; $A1:$B; 2; FALSE)); \"Morning Star\")", null, null, null, null],
   [
     "<insert rows here>", null, null, null,
     "User should add his/her data here.",
@@ -289,16 +358,16 @@ var stockSheetHeaderRows = [
   ["", null, null, null, null],
 ];
 
-// Returns the row 1-based index.
+// Returns the row 1-based index. It uses the global here and doesn't look at the actual
+// sheet. This is much faster but doesn't work if people modify the top rows.
 function getStockSheetHeaderRow(title) {
   for (var i = 0; i < stockSheetHeaderRows.length; i++) {
     if (stockSheetHeaderRows[i][0] == title) {
       return i+1;
     }
   }
-  SpreadsheetApp.getUi().alert("Internal error: Failed to find title \"" + title + "\"");
+  SpreadsheetApp.getUi().alert("Internal error: Failed to find title \"" + title + "\" in stockSheetHeaderRows.");
 }
-
 
 // Adds the missing rows to a sheet, then update the metadata.
 // Resizing columns is super slow so only do it optionally.
@@ -316,7 +385,7 @@ function updateStockSheet(sheet, resizeColumns) {
     return true;
   }
   sheet.getRange(lastRow + 1, 1, values.length, values[0].length).setValues(values);
-  formatLines(sheet, lastRow+1, values.length, getCurrentFmt(ticker));
+  formatStockLines(sheet, lastRow+1, values.length, getCurrentFmt(ticker));
   lastRow += values.length;
   
   // Find the first row of data based on the content. This permits to safely add new header lines up to 40.
@@ -478,9 +547,7 @@ function formatCurrentSheetAsStock() {
     ui.alert("Please use EXCHANGE:SYMBOL format.");
     return false;
   }
-  var sheet = SpreadsheetApp.getActiveSheet();
-  sheet.clear().clearNotes().insertColumnsAfter(1, 26).insertRowsAfter(1, 1000);
-  return formatSheetAsStock(sheet, ticker);
+  return formatSheetAsStock(clearSheet(SpreadsheetApp.getActiveSheet()), ticker);
 }
 
 function formatSheetAsStock(sheet, ticker) {
@@ -524,10 +591,10 @@ function formatSheetAsStock(sheet, ticker) {
   // Sets the data.
   sheet.getRange(stockSheetHeaderRows.length + 1, 1, data.length, data[0].length).setValues(data);
   var currencyFmt = getCurrentFmt(ticker);
-  formatLines(sheet, stockSheetHeaderRows.length + 2, data.length - 1, currencyFmt);
+  formatStockLines(sheet, stockSheetHeaderRows.length + 2, data.length - 1, currencyFmt);
   
   // Fix the data headers. Sadly dividends are not supported by GOOGLEFINANCE() so one has to track it manually! :(
-  if (tickerParts[0] == "CURRENCY" || tickerParts[0] == "MUTF" || tickerParts[0] == "MUTF_CA") {
+  if (tickerParts[0] == "CURRENCY" || tickerParts[0].substr(0, 4) == "MUTF") {
     // Clears Open, High, Low, Volume and Dividend.
     sheet.getRange(stockSheetHeaderRows.length + 1, 2, 1, 3).setValue("");
     sheet.getRange(stockSheetHeaderRows.length + 1, 6, 1, 2).setValue("");
@@ -545,7 +612,7 @@ function formatSheetAsStock(sheet, ticker) {
   var notes = [];
   for (var i in stockSheetHeaderRows) {
     if (stockSheetHeaderRows[i].length != 5) {
-      ui.alert("Internal error: stockSheetHeaderRows is misconfigured, check row " + i);
+      ui.alert("Internal error: stockSheetHeaderRows[" + i + "] is misconfigured");
       return false;
     }
     values[i] = [stockSheetHeaderRows[i][0]];
@@ -567,33 +634,33 @@ function formatSheetAsStock(sheet, ticker) {
     }
     align[i] = [stockSheetHeaderRows[i][2]];
   }
-  values[0] = [ticker];
+  values[getStockSheetHeaderRow("Ticker")-1] = [ticker];
   if (tickerParts[0] == "CURRENCY") {
-    values[1] = [ticker.substr(9, 3)];
-    var from = ticker.substr(9, 3);
-    var to = ticker.substr(12, 3);
-    values[2] = ["Currency"];
-    values[4] = [from + ":" + to];
+    var from = tickerParts[1].substr(0, 3);
+    var to = tickerParts[1].substr(3, 3);
+    values[getStockSheetHeaderRow("Currency")-1] = [to];
+    values[getStockSheetHeaderRow("Asset Type")-1] = ["Currency"];
+    values[getStockSheetHeaderRow("Name")-1] = [from + ":" + to];
     // Use the symbol once available.
-    values[5] = ["Value of 1 " + from + " in " + to];
+    values[getStockSheetHeaderRow("Tracked Index")-1] = ["Value of 1 " + from + " in " + to];
   } else if (tickerParts[0] == "MUTF") {
     // US Mutual Fund.
-    values[1] = ["USD"];
-    values[2] = ["MutualFund"];
+    values[getStockSheetHeaderRow("Currency")-1] = ["USD"];
+    values[getStockSheetHeaderRow("Asset Type")-1] = ["MutualFund"];
   } else if (tickerParts[0] == "MUTF_CA") {
     // Canadian Mutual Fund.
-    values[1] = ["CAD"];
-    values[2] = ["MutualFund"];
+    values[getStockSheetHeaderRow("Currency")-1] = ["CAD"];
+    values[getStockSheetHeaderRow("Asset Type")-1] = ["MutualFund"];
   } else {
-    values[1] = [sheet.getRange(getStockSheetHeaderRow("Currency"), 2).setValue(getGOOGLEFINANCE([ticker, "currency"])).getValue()];
-    values[2] = ["Stock"];
+    values[getStockSheetHeaderRow("Currency")-1] = [sheet.getRange(getStockSheetHeaderRow("Currency"), 2).setValue(getGOOGLEFINANCE([ticker, "currency"])).getValue()];
+    values[getStockSheetHeaderRow("Asset Type")-1] = ["Stock"];
   }
-  if (values[1][0] == "#N/A") {
+  if (values[getStockSheetHeaderRow("Currency")-1][0] == "#N/A") {
     ui.alert(ticker + " is not a valid ticker. Delete the sheet and try again.");
     return false;
   }
   var range = sheet.getRange(1, 2, values.length, 1).setHorizontalAlignments(align).setValues(values).setNumberFormats(fmt);
-  // Zap out the fomulas returning #N/A.
+  // Zap out the formulas returning #N/A.
   var values = range.getValues();
   for (var i = 0; i < values.length; i++) {
     if (values[i][0] == "#N/A") {
@@ -602,18 +669,20 @@ function formatSheetAsStock(sheet, ticker) {
   }
 
   // Tidy the sheet.
-  var delta = sheet.getMaxColumns() - 8;
+  var delta = sheet.getMaxColumns() - data[0].length - 2;
   if (delta) {
-    sheet.deleteColumns(9, delta);
+    sheet.deleteColumns(data[0].length + 3, delta);
   }
-  sheet.setColumnWidth(8, 1000);
+  sheet.setColumnWidth(data[0].length + 2, 1000);
+  highlightFormulas(sheet);
 
   // Format the headers and create the graph.
   return updateStockSheetInner(sheet, ticker, stockSheetHeaderRows.length + 2, stockSheetHeaderRows.length + 1 + data.length, true);
 }
 
 // Format lines of data.
-function formatLines(sheet, row, numRows, currencyFmt) {
+// GOOGLEFINANCE() format plus Divident column: Date, Open, High, Low, Close, Volume, Dividend.
+function formatStockLines(sheet, row, numRows, currencyFmt) {
   sheet.getRange(row, 1, numRows, 1).setNumberFormat("yyyy-MM-dd").setHorizontalAlignment("left");
   sheet.getRange(row, 2, numRows, 4).setNumberFormat(currencyFmt);
   sheet.getRange(row, 6, numRows, 1).setNumberFormat("#,##0");
@@ -622,6 +691,7 @@ function formatLines(sheet, row, numRows, currencyFmt) {
 // Returns the format to use for the ticker.
 function getCurrentFmt(ticker) {
   if (isCurrency(ticker)) {
+    // Exchange rate need more precision.
     return "#,##0.0000\ [$$-C0C]";
   }
   return "#,##0.00\ [$$-C0C]";
@@ -635,19 +705,85 @@ function getCurrentFmt(ticker) {
 var accountSheetHeaderRows = [
   ["Account Name", "<change me>", "Name you want to give to this account or any explanation."],
   ["Account Currency", "<replaced by answer>", "Currency in which the securities are traded in."],
-  ["Tax Currency", "<replaced by answer>", "Currency in which taxes are calculated in."],
+  ["Tax Currency", "=Summary!$B$1", null],
   ["Account Number", "<change me>", "Account number for your personal tracking purpose."],
-  ["", ""],
-]
+  ["Account Type", "Unregistered", "Type of tax shelter, 401k, RRSP, TFSA, RESP, etc."],
+  ["<insert rows here>", null, "User should add his/her data here."],
+  ["", "", null],
+];
+
+// Returns the row 1-based index. It uses the global here and doesn't look at the actual
+// sheet. This is much faster but doesn't work if people modify the top rows.
+function getAccountSheetHeaderRow(title) {
+  for (var i = 0; i < accountSheetHeaderRows.length; i++) {
+    if (accountSheetHeaderRows[i][0] == title) {
+      return i+1;
+    }
+  }
+  SpreadsheetApp.getUi().alert("Internal error: Failed to find title \"" + title + "\" in accountSheetHeaderRows.");
+}
+
+// Internal speed up variable.
+var accountFirstLine = accountSheetHeaderRows.length + 2;
+var accountCell = "$B$" + getAccountSheetHeaderRow("Account Currency");
+var taxCell = "$B$" + getAccountSheetHeaderRow("Tax Currency");
+
+// Zap the conversion columns if the currency is the same.
+var accountSheetDataHeaders = [
+  [
+    "Date", "Ticker", "=" + accountCell + " & \"/stock\"", "# stock", "Close",
+    // e.g. "Total CAD"
+    "=\"Total \" & " + accountCell,
+    // e.g. "CAD"
+    "=" + taxCell,
+    // e.g. "Total CAD"
+    "=\"Total \" & " + taxCell,
+    "ACB",
+    "Type", "Notes", "",
+    "Ticker",
+    "# stock",
+    "=" + taxCell,
+    "ACB",
+  ],
+  [
+    "", "", "", "", "=IF($B"+accountFirstLine+"=\"\"; \"\"; VLOOKUP($A"+accountFirstLine+"; INDIRECT($B"+accountFirstLine+"&\"!$A1:E\"); 5))",
+    "=$C"+accountFirstLine+"*$D"+accountFirstLine,
+    // Zapped out when the currency match.
+    "=VLOOKUP($A"+accountFirstLine+"; INDIRECT($B$2&$B$3 & \"!$A$1:$E\"); 5)",
+    "=$F"+accountFirstLine+"*$G"+accountFirstLine,
+    // ACB
+    "",
+    "", "", "",
+    "=SORT(UNIQUE($B$"+accountFirstLine+":$B))",
+    "=IF($M"+accountFirstLine+"=\"\"; \"\"; SUMIF($B$"+accountFirstLine+":$B; \"=\"&$M"+accountFirstLine+"; $D$"+accountFirstLine+":$D))",
+    "=IF($M"+accountFirstLine+"=\"\"; \"\"; SUMIF($B$"+accountFirstLine+":$B; \"=\"&$M"+accountFirstLine+"; $H$"+accountFirstLine+":$H))",
+    "=IF($M"+accountFirstLine+"=\"\"; \"\"; $O"+accountFirstLine+"/$N"+accountFirstLine+")",
+  ],
+];
+
+// Formatting for the second column.
+var accountSheetDataFmt = [
+  [
+    "yyyy-MM-dd", "@STRING@", "#,##0.00\ [$$-C0C]", "#,##0", "#,##0.00\ [$$-C0C]",
+    "#,##0.00\ [$$-C0C]",
+    "#,##0.00\ [$$-C0C]", "#,##0.00\ [$$-C0C]",
+    "#,##0.00\ [$$-C0C]",
+    "@STRING@", "@STRING@", "@STRING@",
+    "@STRING@",
+    "#,##0",
+    "#,##0.00\ [$$-C0C]",
+    "#,##0.00\ [$$-C0C]",
+  ],
+];
 
 function updateAccountSheet(sheet, resizeColumns) {
   return true;
 }
   
-// Creates a new sheet to track a transactional account.
+// Creates a new sheet to track a broker account.
 function newAccountSheet() {
   var ui = SpreadsheetApp.getUi();
-  var response = ui.prompt("Initializing new sheet", "Please give short name for which you'll track your account with.\nFor example for Americans, \"Joe 401k\", \"Joe Unregistered\".\nFor Canadians, \"Jane RRSP\", \"Jane TFSA\", \"Jane RESP\", \"Jane spouse RRSP\" (yeah, Canada has a lot of tax shelters!) plus \"Jane CAD\" and \"Jane USD\" accounts.", ui.ButtonSet.OK_CANCEL);
+  var response = ui.prompt("Initializing new account sheet", "Please give short name for which you'll track your account with.\nFor example for Americans, \"Joe 401k\", \"Joe Unregistered\".\nFor Canadians, \"Jane RRSP\", \"Jane TFSA\", \"Jane RESP\", \"Jane spouse RRSP\" (yeah, Canada has a lot of tax shelters!) plus \"Jane CAD\" and \"Jane USD\" accounts.", ui.ButtonSet.OK_CANCEL);
   if (response.getSelectedButton() == ui.Button.CANCEL) {
     return false;
   }
@@ -658,76 +794,68 @@ function newAccountSheet() {
     ui.alert("Sheet '" + sheetName + "' already exist! Delete it first.");
     return false;
   }
-  sheet = ss.insertSheet(sheetName);
-  return formatSheetAsAccount(sheet);
+  return formatSheetAsAccount(ss.insertSheet(sheetName));
 }
 
 function formatCurrentSheetAsAccount() {
-  var sheet = SpreadsheetApp.getActiveSheet();
-  sheet.clear().clearNotes().insertColumnsAfter(1, 26).insertRowsAfter(1, 1000);
-  return formatSheetAsAccount(sheet);
+  return formatSheetAsAccount(clearSheet(SpreadsheetApp.getActiveSheet()));
 }
 
 function formatSheetAsAccount(sheet) {
   var ui = SpreadsheetApp.getUi();
+  var summarySheet = SpreadsheetApp.getActive().getSheetByName("Summary");
+  if (summarySheet == null) {
+    ui.alert("Please create the summary sheet first!");
+    return false;
+  }
+  var taxCurrency = summarySheet.getRange(getSummarySheetHeaderRow("Currency"), 2).getValue();
   while (true) {
-    var response = ui.prompt("Initializing new sheet", "In what currency is the account traded in (e.g. CAD, USD)? It is usually the currency of your country.", ui.ButtonSet.OK_CANCEL);
+    var response = ui.prompt("Initializing new account sheet", "In what currency is the account traded in (e.g. CAD, USD)? Defaults to " + taxCurrency + ".", ui.ButtonSet.OK_CANCEL);
     if (response.getSelectedButton() == ui.Button.CANCEL) {
       return false;
     }
     var accountCurrency = response.getResponseText().toUpperCase();
+    if (accountCurrency == "") {
+      accountCurrency = taxCurrency;
+    }
     if (accountCurrency.length == 3) {
       break
     }
-    ui.alert("You must supply a valid currency! Aborting.");
-  }
-  while (true) {
-    var response = ui.prompt("Initializing new sheet", "In what currency do you pay taxes in? It is usually the same currency.", ui.ButtonSet.OK_CANCEL);
-    if (response.getSelectedButton() == ui.Button.CANCEL) {
-      return false;
-    }
-    var taxCurrency = response.getResponseText().toUpperCase();
-    if (taxCurrency.length == 3) {
-      break
-    }
-    ui.alert("You must supply a valid currency! Aborting.");
   }
 
   var values = [];
   var notes = [];
   for (var i in accountSheetHeaderRows) {
+    if (accountSheetHeaderRows[i].length != 3) {
+      SpreadsheetApp.getUi().alert("Internal error: accountSheetHeaderRows[" + i + "] is misconfigured");
+    }
     values[i] = [accountSheetHeaderRows[i][0], accountSheetHeaderRows[i][1]];
     notes[i] = [accountSheetHeaderRows[i][2]];
   }
   values[1][1] = accountCurrency;
-  values[2][1] = taxCurrency;
   sheet.getRange(1, 1, values.length, values[0].length).setValues(values).setHorizontalAlignment("left");
   sheet.getRange(1, 1, values.length, 1).setFontWeight("bold").setNotes(notes);
 
-  // Zap the conversion columns if the currency is the same.
-  var dataHeaders = [
-    [
-      "Date", "Ticker", "$/stock", "# stock",
-      "$ Total",
-      "CAD",
-      "Total " + accountCurrency,
-      "ACB", "Type", "Notes", "",
-      "Ticker", "# stock", "CAD", "ACB",
-    ],
-    [
-      "", "", "", "",
-      "=$C2*$D2",
-      "=IF($G2=$H$1; 1; VLOOKUP($B2; INDIRECT($G2&$H$1 & \"!$A$1:$E\"); 5))",
-      "=$E2*$G2",
-      "", "", "", "",
-      "=SORT(UNIQUE($C$2:$C))", "=IF($O2=\"\"; \"\"; SUMIF($C$2:$C; \"=\"&$O2; $E$2:$E))", "=IF($O2=\"\"; \"\"; SUMIF($C$2:$C; \"=\"&$O2; $I$2:$I))", "=IF($O2=\"\"; \"\"; $Q2/$P2)",
-    ],
-  ]
-  sheet.getRange(accountSheetHeaderRows.length+1, 1, dataHeaders.length, dataHeaders[0].length).setValues(dataHeaders);
-  sheet.getRange(accountSheetHeaderRows.length+1, 1, 1, dataHeaders[0].length).setFontWeight("bold").setHorizontalAlignment("center");
-  sheet.getRange(accountSheetHeaderRows.length+2, 1, 1, dataHeaders[0].length).setHorizontalAlignment("right");
+  sheet.getRange(accountSheetHeaderRows.length+1, 1, accountSheetDataHeaders.length, accountSheetDataHeaders[0].length).setValues(accountSheetDataHeaders);
+  sheet.getRange(accountSheetHeaderRows.length+1, 1, 1, accountSheetDataHeaders[0].length).setFontWeight("bold").setHorizontalAlignment("center");
+  var range = sheet.getRange(accountSheetHeaderRows.length+2, 1, 1, accountSheetDataHeaders[0].length);
+  range.setHorizontalAlignment("right").setNumberFormats(accountSheetDataFmt);
+  
+  if (accountCurrency == taxCurrency) {
+    // True the majority of the time; zap out the currency conversion column.
+    // The columns are hard coded. :(
+    var totalCurrencyRow = 6;
+    sheet.getRange(accountSheetHeaderRows.length+2, totalCurrencyRow+2).setValue(sheet.getRange(accountSheetHeaderRows.length+2, totalCurrencyRow).getValue());
+    sheet.getRange(accountSheetHeaderRows.length+1, totalCurrencyRow, 2, 2).clearContent();
+    sheet.setColumnWidth(totalCurrencyRow, 10);
+    sheet.setColumnWidth(totalCurrencyRow+1, 10);
+  }
 
-  // Trim lines.
+  range.copyTo(sheet.getRange(accountSheetHeaderRows.length+3, 1, accountSheetHeaderRows.length+103, accountSheetDataHeaders[0].length));
+  // Ticker is special because it uses UNIQUE().
+  // Column is hard coded.
+  sheet.getRange(accountSheetHeaderRows.length+3, 13, accountSheetHeaderRows.length+103, 1).clearContent();
+
   var lastrow = sheet.getLastRow();
   var delta = sheet.getMaxRows() - lastrow;
   if (delta > 0) {
@@ -739,8 +867,14 @@ function formatSheetAsAccount(sheet) {
     sheet.deleteColumns(lastcol+1, delta);
   }
   for (var i = 1; i < lastcol; i++) {
-    sheet.autoResizeColumn(i);
+    if (accountSheetDataHeaders[0][i-1] == "") {
+      sheet.setColumnWidth(i, 50);
+    } else {
+      sheet.autoResizeColumn(i);
+    }
   }
+  highlightFormulas(sheet);
+  sheet.setActiveSelection("A1");
   return true;
 }
 
@@ -748,9 +882,27 @@ function formatSheetAsAccount(sheet) {
 // Summary sheet management.
 
 
+// Format: [<A column>, <B column>, <A note>].
 var summarySheetHeaderRows = [
-  ["Account", "StockCA", "StockUS", "StockIntl", "Bond", "Income", "Total CAD"],
-  ["", "", "", "", "", "", "SUM($B2:$F2)", "=G2/$O$16"],
+  ["Currency", "CAD", "Currency in which you are taxed in."],
+  ["<insert rows here>", null, "User should add his/her data here."],
+  ["", "", null],
+];
+
+// Returns the row 1-based index. It uses the global here and doesn't look at the actual
+// sheet. This is much faster but doesn't work if people modify the top rows.
+function getSummarySheetHeaderRow(title) {
+  for (var i = 0; i < summarySheetHeaderRows.length; i++) {
+    if (summarySheetHeaderRows[i][0] == title) {
+      return i+1;
+    }
+  }
+  SpreadsheetApp.getUi().alert("Internal error: Failed to find title \"" + title + "\" in summarySheetHeaderRows.");
+}
+
+var summarySheetDataRows = [
+  ["Account", "StockCA", "StockUS", "StockIntl", "Bond", "Income", "Total CAD", "", "Stock", "Current"],
+    ["=ACCOUNTS()", "", "", "", "", "=SUM($B2:$F2)", "=G2/$O$16", "", "=TRACKED_STOCKS()", "=INDIRECT($I2:I & \"!$B$8\")"],
 ];
 
 function updateSummarySheet(sheet, resizeColumns) {
@@ -758,19 +910,27 @@ function updateSummarySheet(sheet, resizeColumns) {
 }
 
 function formatCurrentSheetAsSummary() {
-  var sheet = SpreadsheetApp.getActiveSheet();
-  sheet.clear().clearNotes().insertColumnsAfter(1, 26).insertRowsAfter(1, 1000);
-  return formatSheetAsSummary(sheet);
+  return formatSheetAsSummary(clearSheet(SpreadsheetApp.getActiveSheet().setName("Summary")));
 }
 
 // Formats the current sheet as a Summary sheet.
 function formatSheetAsSummary(sheet) {
-  // Trim lines.
-  var lastrow = sheet.getLastRow();
-  var delta = sheet.getMaxRows() - lastrow;
-  if (delta > 0) {
-    sheet.deleteRows(lastrow+1, delta);
+  var values = [];
+  var notes = [];
+  for (var i in summarySheetHeaderRows) {
+    if (summarySheetHeaderRows[i].length != 3) {
+      SpreadsheetApp.getUi().alert("Internal error: summarySheetHeaderRows[" + i + "] is misconfigured");
+      return false;
+    }
+    values[i] = [summarySheetHeaderRows[i][0], summarySheetHeaderRows[i][1]];
+    notes[i] = [summarySheetHeaderRows[i][2]];
   }
+  sheet.getRange(1, 1, values.length, values[0].length).setValues(values);
+  sheet.getRange(1, 1, values.length, 1).setFontWeight("bold").setNotes(notes);
+
+  sheet.getRange(values.length+1, 1, summarySheetDataRows.length, summarySheetDataRows[0].length).setValues(summarySheetDataRows);
+  sheet.getRange(values.length+1, 1, 1, summarySheetDataRows[0].length).setFontWeight("bold").setHorizontalAlignment("center");
+
   var lastcol = sheet.getLastColumn();
   var delta = sheet.getMaxColumns() - lastcol;
   if (delta > 0) {
@@ -779,11 +939,52 @@ function formatSheetAsSummary(sheet) {
   for (var i = 1; i < lastcol; i++) {
     sheet.autoResizeColumn(i);
   }
+  highlightFormulas(sheet);
   return true;
 }
 
 
 // Utilities.
+
+
+// Clears a sheet into a pristine sheet of 26 columns, 1000 rows.
+function clearSheet(sheet) {
+  var limitRows = 1000;
+  var limitCols = 26;
+  sheet.clear().clearNotes();
+  var maxRows = sheet.getMaxRows();
+  if (maxRows > limitRows) {
+    sheet.deleteRows(1, maxRows-limitRows);
+  } else if (maxRows < limitRows) {
+    sheet.insertRowsAfter(1, limitRows-maxRows);
+  }
+  var maxCols = sheet.getMaxColumns();
+  if (maxCols > limitCols) {
+    sheet.deleteColumns(1, maxCols-limitCols);
+  } else if (maxCols < limitCols) {
+    sheet.insertColumnsAfter(1, limitCols-maxCols);
+  }
+  return sheet;
+}
+
+// Highlights all formulas to clarify to the user what is raw data and what is "calculated".
+function highlightFormulas(sheet) {
+  var range = sheet.getDataRange();
+  var colors = [];
+  var formulas = range.getFormulas();
+  for (var y = 0; y < formulas.length; y++) {
+    colors[y] = [];
+    for (var x = 0; x < formulas[y].length; x++) {
+      if (formulas[y][x].substr(0, 1) == "=") {
+        colors[y][x] = "#F8F8FF";
+      } else {
+        colors[y][x] = null;
+      }
+    }
+  }
+  range.setBackgrounds(colors);
+}
+
 
 // Utilities: Date
 
